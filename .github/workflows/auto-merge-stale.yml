@@ -1,0 +1,205 @@
+name: Auto-merge stale pull requests
+
+# Merges open pull requests that have been waiting for more than N days
+# (default: 14) into the default branch.
+#
+# A pull request is only merged when it is:
+#   * not a draft,
+#   * free of merge conflicts,
+#   * not blocked by branch protection (missing review, dirty state, ...),
+#   * green: every check finished successfully (or the PR has no checks yet).
+# Everything else is skipped and reported in the job summary.
+#
+# Runs every day at 03:00 UTC; can also be started manually with a custom
+# age / merge method / label filter, or as a dry run.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Minimum age of a pull request in days"
+        required: false
+        default: "14"
+      method:
+        description: "Merge method"
+        type: choice
+        options: [squash, merge, rebase]
+        required: false
+        default: squash
+      label:
+        description: "Only merge pull requests carrying this label (empty = no filter)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Report what would be merged without merging anything"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write       # merge the PR and delete the head branch
+  pull-requests: write  # read, comment on and merge pull requests
+
+concurrency:
+  group: auto-merge-stale
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    env:
+      # A merge performed with GITHUB_TOKEN does not trigger further workflow
+      # runs (GitHub suppresses the resulting push events). Expose an
+      # AUTOMERGE_TOKEN secret (PAT or GitHub App token) if the merge should
+      # start CI on the default branch.
+      GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      DAYS: ${{ inputs.days || '14' }}
+      METHOD: ${{ inputs.method || 'squash' }}
+      LABEL: ${{ inputs.label || '' }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+    steps:
+      - name: Merge pull requests older than the configured age
+        run: |
+          set -uo pipefail
+
+          case "$METHOD" in
+            merge|squash|rebase) ;;
+            *) echo "::error::Unsupported merge method: $METHOD"; exit 1 ;;
+          esac
+          if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+            echo "::error::days must be a non-negative integer, got: $DAYS"
+            exit 1
+          fi
+
+          cutoff=$(date -u -d "-${DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Eligible: PRs created before $cutoff"
+          echo "Method: $METHOD | Label filter: ${LABEL:-<none>} | Dry run: $DRY_RUN"
+
+          merged=0
+          skipped=0
+          failed=0
+          summary="| PR | Title | Result |\n| --- | --- | --- |\n"
+
+          # 1. Cheap pre-filter with a single API call: open, not a draft,
+          #    created before the cutoff and (optionally) carrying the label.
+          prs=$(gh pr list --repo "$REPO" --state open --limit 300 \
+                  --json number,title,createdAt,isDraft,labels) || {
+            echo "::error::gh pr list failed"; exit 1; }
+
+          mapfile -t candidates < <(
+            jq -r --arg cutoff "$cutoff" --arg label "$LABEL" '
+              .[]
+              | select(.isDraft == false)
+              | select(.createdAt < $cutoff)
+              | select($label == "" or ([.labels[].name] | index($label)))
+              | "\(.number)\t\(.title)"
+            ' <<<"$prs"
+          )
+
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "Nothing to do: no pull request older than ${DAYS} days."
+          fi
+
+          for row in "${candidates[@]:-}"; do
+            [ -n "$row" ] || continue
+            number=${row%%$'\t'*}
+            title=${row#*$'\t'}
+            title=${title//|/ }  # keep the markdown summary table intact
+
+            # 2. Re-read the live merge state; `mergeable` can be UNKNOWN until
+            #    GitHub finished its background mergeability check.
+            info=$(gh pr view "$number" --repo "$REPO" \
+                     --json mergeable,mergeStateStatus,statusCheckRollup) || {
+              echo "::warning::Could not read PR #$number"; failed=$((failed+1))
+              summary+="| #$number | $title | read error |\n"; continue; }
+
+            verdict=$(jq -r '
+              [
+                .mergeable,
+                .mergeStateStatus,
+                ([.statusCheckRollup[]?
+                  | (.conclusion // .state // "PENDING")] as $checks
+                 | if any($checks[]; . == "FAILURE" or . == "ERROR" or . == "CANCELLED"
+                                   or . == "TIMED_OUT" or . == "STARTUP_FAILURE"
+                                   or . == "ACTION_REQUIRED") then "failing"
+                   elif any($checks[]; . == "PENDING" or . == "IN_PROGRESS" or . == "QUEUED"
+                                   or . == "EXPECTED" or . == "WAITING" or . == "REQUESTED")
+                     then "pending"
+                   else "passing" end)
+              ] | @tsv
+            ' <<<"$info") || {
+              echo "::warning::Could not parse the state of PR #$number"; failed=$((failed+1))
+              summary+="| #$number | $title | parse error |\n"; continue; }
+
+            IFS=$'\t' read -r mergeable merge_state checks <<<"$verdict"
+
+            reason=""
+            if [ "$mergeable" != "MERGEABLE" ]; then
+              reason="mergeable=$mergeable"
+            elif [ "$checks" = "failing" ]; then
+              reason="checks failing"
+            elif [ "$checks" = "pending" ]; then
+              reason="checks still running"
+            elif [ "$merge_state" = "DIRTY" ]; then
+              reason="merge conflicts"
+            elif [ "$merge_state" = "BLOCKED" ]; then
+              reason="blocked by branch protection"
+            elif [ "$merge_state" = "BEHIND" ]; then
+              reason="branch out of date"
+            fi
+
+            if [ -n "$reason" ]; then
+              echo "Skip #$number ($title): $reason"
+              skipped=$((skipped+1))
+              summary+="| #$number | $title | skipped: $reason |\n"
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] Would merge #$number ($title)"
+              summary+="| #$number | $title | dry run, would merge |\n"
+              continue
+            fi
+
+            # 3. Give the author some context, then merge and clean up.
+            gh pr comment "$number" --repo "$REPO" \
+              --body "This pull request has been open for more than ${DAYS} days and all checks are green, so it is being merged automatically by \`.github/workflows/auto-merge-stale.yml\`." \
+              || echo "::notice::Could not comment on #$number"
+
+            if gh pr merge "$number" --repo "$REPO" --"$METHOD" --delete-branch; then
+              echo "Merged #$number ($title)"
+              merged=$((merged+1))
+              summary+="| #$number | $title | merged ($METHOD) |\n"
+            else
+              # `--delete-branch` fails for fork heads: the merge itself may still
+              # have gone through, so check the state before calling it a failure.
+              state=$(gh pr view "$number" --repo "$REPO" --json state --jq .state 2>/dev/null)
+              if [ "$state" = "MERGED" ]; then
+                echo "Merged #$number ($title); head branch could not be deleted"
+                merged=$((merged+1))
+                summary+="| #$number | $title | merged ($METHOD), branch kept |\n"
+              else
+                echo "::warning::Merging #$number failed"
+                failed=$((failed+1))
+                summary+="| #$number | $title | merge failed |\n"
+              fi
+            fi
+          done
+
+          echo "Summary: merged=$merged skipped=$skipped failed=$failed"
+          {
+            echo "### Auto-merge (PRs older than ${DAYS} days)"
+            echo
+            printf '%b' "$summary"
+            echo
+            echo "merged: $merged | skipped: $skipped | failed: $failed"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          # A merge failure must not break the nightly run; only surface it when
+          # the job was started manually.
+          if [ "$failed" -gt 0 ] && [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            exit 1
+          fi
