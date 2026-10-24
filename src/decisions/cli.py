@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .api.cli import main as api_main
 from .core import config as config_mod
 from .core import db, frontmatter, gitutils, project
 from .core.models import STATUSES, anchor, normalize_version, version_key
@@ -35,6 +37,7 @@ EDITOR_TEMPLATE = """
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the ``decisions`` argument parser."""
     parser = argparse.ArgumentParser(
         prog="decisions",
         description="Project context indexer: decision log + API docs, linked in SQLite.",
@@ -123,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point: dispatch one sub-command and return its exit code."""
     configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
@@ -137,8 +141,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "context": cmd_context,
     }
     if args.command == "api":
-        from .api.cli import main as api_main
-
         return api_main(args.api_args)
 
     try:
@@ -154,6 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    """Create the decision log, state directory, config and .gitignore entries."""
     root = project.find_root()
     project.decision_root(root).mkdir(parents=True, exist_ok=True)
     project.state_dir(root).mkdir(parents=True, exist_ok=True)
@@ -207,6 +210,7 @@ def ensure_gitignored(root: Path, entry: str) -> bool:
 
 
 def cmd_add(args: argparse.Namespace) -> int:
+    """Record one decision (metadata from flags, body from -r/stdin/$EDITOR)."""
     root = project.find_root()
     config = config_mod.Config.load(root)
     topic = _safe_topic(args.topic)
@@ -294,8 +298,6 @@ def _read_from_editor() -> str:
         handle.write(EDITOR_TEMPLATE)
         temp_path = Path(handle.name)
     try:
-        import subprocess
-
         proc = subprocess.run([*editor.split(), str(temp_path)], check=False)
         if proc.returncode != 0:
             raise ValueError(f"editor exited with {proc.returncode}")
@@ -327,6 +329,7 @@ def _safe_topic(topic: str) -> str:
 
 
 def slugify(text: str, limit: int = 60) -> str:
+    """ASCII-ish URL/file slug derived from a title (never empty)."""
     value = text.strip().lower()
     value = re.sub(r"[^\w\s-]", "", value, flags=re.UNICODE)
     value = re.sub(r"[\s_]+", "-", value).strip("-")
@@ -373,6 +376,7 @@ def _normalise_file(root: Path, value: str) -> str:
 
 
 def cmd_recall(args: argparse.Namespace) -> int:
+    """Full-text search over the decision log (optionally filter-only)."""
     root = project.find_root()
     config = config_mod.Config.load(root)
     conn, warnings = db.ensure_index(root, config)
@@ -486,6 +490,7 @@ def _summary(body: str, limit: int = 200) -> str:
 
 
 def cmd_timeline(args: argparse.Namespace) -> int:
+    """Print decisions in chronological order."""
     root = project.find_root()
     config = config_mod.Config.load(root)
     conn, warnings = db.ensure_index(root, config)
@@ -533,6 +538,7 @@ def cmd_timeline(args: argparse.Namespace) -> int:
 
 
 def cmd_context(args: argparse.Namespace) -> int:
+    """Show the API contract and related decisions for a file or symbol."""
     root = project.find_root()
     config = config_mod.Config.load(root)
     conn, warnings = db.ensure_index(root, config)
@@ -724,7 +730,6 @@ def _resolve_api(
         # own indev branch (the code there no longer matches the baseline).
         candidates += released
         candidates += [f"~{version}" for version in head] + drafts
-    candidates = list(dict.fromkeys(candidates))
     candidates = list(dict.fromkeys(candidates))
 
     for candidate in candidates:

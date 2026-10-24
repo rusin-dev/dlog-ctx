@@ -82,22 +82,21 @@ def extract_symbols(
         module = _module_name(rel_path, source_root)
         topic = _topic_for(rel_path, module, config)
         doc_path = render.doc_path(version, topic)
+        location = {
+            "module": module,
+            "topic": topic,
+            "doc_path": doc_path,
+            "rel_path": rel_path,
+        }
         try:
-            symbols.extend(
-                backend.extract(
-                    text,
-                    module=module,
-                    topic=topic,
-                    doc_path=doc_path,
-                    rel_path=rel_path,
-                )
-            )
+            symbols.extend(backend.extract(text, **location))
         except SyntaxError as exc:
-            location = f"line {exc.lineno}" if exc.lineno else "unknown line"
-            warnings.append(f"{rel_path}: {exc.msg} ({location})")
+            where = f"line {exc.lineno}" if exc.lineno else "unknown line"
+            warnings.append(f"{rel_path}: {exc.msg} ({where})")
         except (ValueError, RecursionError) as exc:
             warnings.append(f"{rel_path}: {exc}")
-        except Exception as exc:  # pragma: no cover - defensive for plugins
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # Plugin backends are third-party code: report and keep going.
             warnings.append(f"{rel_path}: extractor {backend.name} failed: {exc}")
 
     symbols.sort(key=lambda symbol: symbol.qualified_name)
@@ -132,7 +131,9 @@ def _enabled_backends(config: Config) -> set[str] | None:
             backend = langs.backend_for(candidate if candidate.startswith(".") else f".{candidate}")
         if backend is not None:
             resolved.add(backend.name)
-    return resolved or None
+    if not resolved:
+        return None
+    return resolved
 
 
 def _iter_source_files(root: Path, config: Config) -> list[tuple[str, str]]:

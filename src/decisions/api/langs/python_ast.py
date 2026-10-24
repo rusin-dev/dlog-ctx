@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from ...core.models import ApiSymbol, decision_refs, strip_decision_refs
-from . import Backend
+from .base import Backend, module_symbol
 
 
 def extract(
@@ -19,17 +19,12 @@ def extract(
     """Parse one module and return its public symbols."""
     tree = ast.parse(text, filename=rel_path)
     symbols: list[ApiSymbol] = [
-        ApiSymbol(
-            qualified_name=module,
-            kind="module",
+        module_symbol(
             module=module,
             topic=topic,
             doc_path=doc_path,
-            signature=f"module {module}",
+            rel_path=rel_path,
             doc=strip_decision_refs(ast.get_docstring(tree)),
-            source_file=rel_path,
-            lineno=1,
-            decision_refs=decision_refs(ast.get_docstring(tree)),
         )
     ]
     for node in tree.body:
@@ -131,7 +126,8 @@ def _annotation(node: ast.expr | None) -> str | None:
         return None
     try:
         return ast.unparse(node)
-    except Exception:  # pragma: no cover - ast.unparse is robust on parsed trees
+    except Exception:  # pylint: disable=broad-exception-caught
+        # ast.unparse is robust on parsed trees; degrade to "no annotation".
         return None
 
 

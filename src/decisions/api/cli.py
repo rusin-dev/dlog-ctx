@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from .. import __version__
@@ -35,6 +35,7 @@ EXIT_CONFLICT = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the ``decisions-api`` argument parser."""
     parser = argparse.ArgumentParser(
         prog="decisions-api",
         description="Generate API docs from code and manage baselines (vX.Y).",
@@ -121,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point: dispatch one sub-command and return its exit code."""
     configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
@@ -130,25 +132,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = project.find_root(args.root)
 
     try:
-        if args.command == "sync":
-            return cmd_sync(root, args)
-        if args.command == "diff":
-            return cmd_diff(root, args)
-        if args.command == "check":
-            return cmd_check(root, args)
-        if args.command == "indev":
-            return cmd_indev(root, args)
-        if args.command == "release":
-            return cmd_release(root, args)
-        if args.command == "head":
-            return cmd_head(root, args)
+        handler = _command_for(args.command)
+        if handler is None:  # pragma: no cover - argparse enforces the choices
+            return EXIT_ERROR
+        return handler(root, args)
     except (indev.IndevError, sync.SyncError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
     except (ValueError, OSError, gitutils.GitError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    return EXIT_ERROR  # pragma: no cover
+
+
+def _command_for(name: str) -> Callable[[Path, argparse.Namespace], int] | None:
+    """Map a sub-command name to its handler (``None`` for unknown names)."""
+    return {
+        "sync": cmd_sync,
+        "diff": cmd_diff,
+        "check": cmd_check,
+        "indev": cmd_indev,
+        "release": cmd_release,
+        "head": cmd_head,
+    }.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def cmd_sync(root: Path, args: argparse.Namespace) -> int:
+    """Run ``sync`` once, or forever with ``--watch``."""
     interval = args.watch
     if interval is None:
         return _sync_once(root, args)
@@ -245,6 +251,7 @@ def _print_changes(label: str, items: list[str], limit: int = 12) -> None:
 
 
 def cmd_diff(root: Path, args: argparse.Namespace) -> int:
+    """Print the unified diff for one version without writing anything."""
     config = config_mod.Config.load(root)
     version = normalize_version(args.version)
     patch, _base, _target, _symbols, warnings = sync.compute_patch(root, version, config)
@@ -260,6 +267,7 @@ def cmd_diff(root: Path, args: argparse.Namespace) -> int:
 
 
 def cmd_check(root: Path, args: argparse.Namespace) -> int:
+    """Report bookkeeping inconsistencies found by :func:`sync.check_project`."""
     findings = sync.check_project(root)
     if args.json:
         print(
@@ -283,6 +291,7 @@ def cmd_check(root: Path, args: argparse.Namespace) -> int:
 
 
 def cmd_indev(root: Path, args: argparse.Namespace) -> int:
+    """Dispatch ``indev start|finish|list``."""
     command = args.indev_command
     if command == "start":
         return _indev_start(root, args)
@@ -405,6 +414,7 @@ def _indev_list(root: Path, args: argparse.Namespace) -> int:
 
 
 def cmd_release(root: Path, args: argparse.Namespace) -> int:
+    """Create the release tag on the current indev branch."""
     result = indev.release(root, args.tag)
     if args.json:
         print(
@@ -429,6 +439,7 @@ def cmd_release(root: Path, args: argparse.Namespace) -> int:
 
 
 def cmd_head(root: Path, args: argparse.Namespace) -> int:
+    """List, add or remove lines in ``docs/api/head``."""
     versions = project.read_head(root)
     if args.head_command == "list":
         if not versions:

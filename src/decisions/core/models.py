@@ -47,6 +47,7 @@ def normalize_version(version: str) -> str:
 
 
 def is_version(value: str) -> bool:
+    """True when ``value`` looks like ``v1``/``v1.3``/``~v1.3.1``."""
     return bool(VERSION_RE.match(value.strip()))
 
 
@@ -125,4 +126,5 @@ class ApiSymbol:
         return anchor(self.qualified_name)
 
     def doc_link(self) -> str:
+        """Repo-relative link to this symbol's section (``path#anchor``)."""
         return f"{self.doc_path}#{self.anchor()}"

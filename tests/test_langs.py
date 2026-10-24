@@ -123,9 +123,15 @@ function greet(string $name): string {
 
 
 class GenericBackendTest(unittest.TestCase):
+    """Regex backends for TypeScript, Go, Rust, Java, Ruby and PHP."""
+
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+        # `enterContext` registers the cleanup with unittest: the temporary
+        # directory is removed even when an assertion fails.
+        self._tmp = self.enterContext(
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
+        self.root = Path(self._tmp)
         (self.root / "src" / "web").mkdir(parents=True)
         self.files = {
             "src/web/app.ts": TS_SOURCE,
@@ -138,10 +144,8 @@ class GenericBackendTest(unittest.TestCase):
         for rel, text in self.files.items():
             (self.root / rel).write_text(text, encoding="utf-8")
 
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
     def extract(self, **config_overrides) -> dict[str, ApiSymbol]:
+        """Extract every sample file and index the symbols by qualified name."""
         config = Config(
             self.root,
             {"api": {"source_roots": ["src"], **config_overrides}},
@@ -152,6 +156,7 @@ class GenericBackendTest(unittest.TestCase):
 
     # -- TypeScript / JavaScript ---------------------------------------
     def test_typescript_symbols(self) -> None:
+        """Classes, interfaces, methods, functions and constants are found."""
         symbols = self.extract()
         for name in (
             "web.app.Server",
@@ -172,6 +177,7 @@ class GenericBackendTest(unittest.TestCase):
 
     # -- Go --------------------------------------------------------------
     def test_go_symbols(self) -> None:
+        """Pointer receivers qualify methods with the receiver type."""
         symbols = self.extract()
         self.assertIn("web.main.Server", symbols)
         self.assertIn("web.main.Server.Start", symbols)
@@ -183,6 +189,7 @@ class GenericBackendTest(unittest.TestCase):
 
     # -- Rust ------------------------------------------------------------
     def test_rust_symbols(self) -> None:
+        """``impl`` blocks scope methods without duplicating the struct symbol."""
         symbols = self.extract()
         self.assertIn("web.lib.Cache", symbols)
         self.assertIn("web.lib.Cache.new", symbols)
@@ -195,6 +202,7 @@ class GenericBackendTest(unittest.TestCase):
 
     # -- Java / Ruby / PHP ----------------------------------------------
     def test_java_symbols(self) -> None:
+        """Java classes, methods and constants are extracted."""
         symbols = self.extract()
         self.assertIn("web.Routes.Routes", symbols)
         self.assertIn("web.Routes.Routes.register", symbols)
@@ -202,6 +210,7 @@ class GenericBackendTest(unittest.TestCase):
         self.assertEqual(symbols["web.Routes.Routes.register"].doc, "Register a route.")
 
     def test_ruby_symbols(self) -> None:
+        """Ruby indentation scopes produce class methods and top-level functions."""
         symbols = self.extract()
         self.assertIn("web.tasks.Task", symbols)
         self.assertIn("web.tasks.Task.run", symbols)
@@ -212,6 +221,7 @@ class GenericBackendTest(unittest.TestCase):
         self.assertEqual(symbols["web.tasks.Task.run"].doc, "Run the task.")
 
     def test_php_symbols(self) -> None:
+        """PHP classes, methods, constants and functions are extracted."""
         symbols = self.extract()
         self.assertIn("web.greet.Greeter", symbols)
         self.assertIn("web.greet.Greeter.hello", symbols)
@@ -221,6 +231,7 @@ class GenericBackendTest(unittest.TestCase):
 
     # -- configuration ---------------------------------------------------
     def test_language_restriction(self) -> None:
+        """``api.languages`` limits both extraction and reported suffixes."""
         config = Config(
             self.root,
             {"api": {"source_roots": ["src"], "languages": ["python"]}},
@@ -231,6 +242,7 @@ class GenericBackendTest(unittest.TestCase):
         self.assertIn(".ts", extractor.supported_suffixes())
 
     def test_language_restriction_accepts_suffix(self) -> None:
+        """A suffix such as ``.ts`` is accepted instead of a backend name."""
         config = Config(
             self.root,
             {"api": {"source_roots": ["src"], "languages": [".ts"]}},
@@ -241,6 +253,7 @@ class GenericBackendTest(unittest.TestCase):
         self.assertNotIn("web.main.Server", names)
 
     def test_language_restriction_accepts_alias(self) -> None:
+        """Aliases such as ``typescript`` map onto the javascript backend."""
         config = Config(
             self.root,
             {"api": {"source_roots": ["src"], "languages": ["python", "typescript"]}},
@@ -251,6 +264,7 @@ class GenericBackendTest(unittest.TestCase):
         self.assertNotIn("web.main.Server", names)
 
     def test_decision_refs_from_comments(self) -> None:
+        """``@decision:`` markers in doc comments become back-references only."""
         path = self.root / "src" / "web" / "refs.go"
         path.write_text(
             "// Chosen for reasons.\n//\n// @decision:storage/use-sqlite\nfunc RefOne() {}\n",
@@ -263,7 +277,10 @@ class GenericBackendTest(unittest.TestCase):
 
 
 class RegistryTest(unittest.TestCase):
+    """Backend registration and third-party plugin injection."""
+
     def test_builtin_backends_are_registered(self) -> None:
+        """Every built-in backend is registered under its suffixes."""
         self.assertIn("python", langs.available())
         for name in ("javascript", "go", "rust", "java", "kotlin", "csharp", "ruby", "php"):
             self.assertIn(name, langs.available())
@@ -272,14 +289,17 @@ class RegistryTest(unittest.TestCase):
         self.assertIsNone(langs.backend_for(".txt"))
 
     def test_custom_backend_is_picked_up(self) -> None:
+        """A backend registered for a new suffix is used by the pipeline."""
+
         def fake_extract(
-            text: str,
+            _text: str,
             *,
             module: str,
             topic: str,
             doc_path: str,
             rel_path: str,
         ) -> list[ApiSymbol]:
+            """Return a single fake symbol for the module being scanned."""
             return [
                 ApiSymbol(
                     qualified_name=f"{module}.custom",

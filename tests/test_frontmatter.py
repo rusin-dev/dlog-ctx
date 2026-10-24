@@ -9,12 +9,16 @@ from decisions.core import frontmatter
 
 
 class ParseTest(unittest.TestCase):
+    """Reading the YAML subset used by decision documents."""
+
     def test_no_frontmatter(self) -> None:
+        """A document without delimiters yields empty metadata and the full body."""
         meta, body = frontmatter.parse("just text\n")
         self.assertEqual(meta, {})
         self.assertEqual(body, "just text\n")
 
     def test_basic_fields_and_comments(self) -> None:
+        """Scalars, block lists, inline lists and trailing comments are parsed."""
         text = (
             "---\n"
             "title: SQLite instead of Postgres\n"
@@ -39,21 +43,27 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(body, "Because.")
 
     def test_empty_list_placeholder_becomes_string(self) -> None:
+        """A key without items degrades to an empty string, not ``None``."""
         meta, _ = frontmatter.parse("---\ntags:\n---\n\nx\n")
         self.assertEqual(meta["tags"], "")
 
     def test_invalid_line_raises(self) -> None:
+        """Unparsable lines raise instead of being silently dropped."""
         with self.assertRaises(frontmatter.FrontmatterError):
             frontmatter.parse("---\nnonsense line\n---\n\nbody\n")
 
     def test_unterminated_frontmatter_is_body(self) -> None:
+        """An opening delimiter without a closing one is treated as plain text."""
         meta, body = frontmatter.parse("---\ntitle: x\n")
         self.assertEqual(meta, {})
         self.assertIn("title: x", body)
 
 
 class DumpTest(unittest.TestCase):
+    """Serialising metadata back to Markdown."""
+
     def test_roundtrip(self) -> None:
+        """Dumping then parsing returns the original mapping and body."""
         meta = {
             "title": "Storage: SQLite #1",
             "date": "2026-10-24",
@@ -74,11 +84,13 @@ class DumpTest(unittest.TestCase):
         self.assertEqual(body.strip(), body_in)
 
     def test_empty_values_are_skipped(self) -> None:
+        """Empty strings and empty lists are not written to the document."""
         text = frontmatter.dump({"title": "t", "commit": "", "tags": []}, "body")
         self.assertNotIn("commit:", text)
         self.assertNotIn("tags:", text)
 
     def test_date_object(self) -> None:
+        """``date``/``datetime`` values are written as ``YYYY-MM-DD``."""
         text = frontmatter.dump({"title": "t", "date": dt.date(2026, 1, 2)}, "b")
         self.assertIn("date: 2026-01-02", text)
 

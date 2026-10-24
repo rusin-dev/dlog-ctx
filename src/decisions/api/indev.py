@@ -46,6 +46,7 @@ class IndevError(RuntimeError):
 
 
 def marker_block(version: str) -> str:
+    """Markdown marker range announcing the in-development version."""
     version = normalize_version(version)
     return (
         "<!-- decisions:indev -->\n"
@@ -63,6 +64,7 @@ def _block_version(match: re.Match[str]) -> str | None:
 
 
 def agents_text(root: Path) -> str:
+    """Current ``AGENTS.md`` content (``""`` when the file does not exist)."""
     path = root / AGENTS_FILE
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
@@ -130,6 +132,8 @@ def remove_agents_block(root: Path, version: str) -> bool:
 
 @dataclass
 class StartResult:
+    """What ``indev start`` did: branch, base branch and draft directory."""
+
     version: str
     branch: str
     base: str
@@ -139,6 +143,7 @@ class StartResult:
 
 
 def start(root: Path, version: str, base: str | None = None) -> StartResult:
+    """Create ``indev-<version>`` from ``base`` and prepare the draft workspace."""
     version = normalize_version(version)
     if not gitutils.is_repo(root):
         raise IndevError("not a git repository")
@@ -190,6 +195,8 @@ def start(root: Path, version: str, base: str | None = None) -> StartResult:
 
 @dataclass
 class FinishResult:
+    """What ``indev finish`` did, including merge/conflict state."""
+
     version: str
     branch: str
     patch_applied: bool
@@ -209,6 +216,7 @@ def finish(
     base: str | None = None,
     close_head: bool = False,
 ) -> FinishResult:
+    """Apply the draft patch, commit the baseline and merge the indev branch."""
     version = normalize_version(version)
     branch = f"indev-{version}"
     current = gitutils.current_branch(root)
@@ -307,12 +315,15 @@ def finish(
 
 @dataclass
 class ReleaseResult:
+    """The release tag that was created and the commit it points at."""
+
     tag: str
     version: str
     commit: str | None
 
 
 def release(root: Path, tag: str) -> ReleaseResult:
+    """Create the annotated release tag ``vX.Y.Z`` on the current indev branch."""
     tag = tag.strip()
     if not RELEASE_TAG_RE.match(tag):
         raise IndevError(f"{tag!r} is not a release tag (expected vX.Y.Z)")
@@ -354,6 +365,8 @@ def release(root: Path, tag: str) -> ReleaseResult:
 
 @dataclass
 class VersionStatus:
+    """Bookkeeping state of one version listed in ``docs/api/head``."""
+
     version: str
     branch: bool
     draft: bool
@@ -374,6 +387,7 @@ def _drop_draft_index(root: Path, version: str) -> None:
 
 
 def list_versions(root: Path) -> list[VersionStatus]:
+    """Report branch/draft/patch state for every version in ``head``."""
     result: list[VersionStatus] = []
     for version in project.read_head(root):
         draft_dir = project.draft_dir(root, version)

@@ -53,6 +53,7 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create missing tables, apply migrations and set up full-text search."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     _migrate(conn)
     _ensure_fts(conn)
@@ -126,6 +127,7 @@ def docs_fingerprint(root: Path) -> str:
 
 
 def is_stale(conn: sqlite3.Connection, root: Path) -> bool:
+    """True when ``docs/`` changed since the index was last built."""
     try:
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (FINGERPRINT_KEY,)).fetchone()
     except sqlite3.DatabaseError:
@@ -151,7 +153,8 @@ def ensure_index(
 def rebuild(
     conn: sqlite3.Connection,
     root: Path,
-    config: config_mod.Config | None = None,
+    # Accepted for signature symmetry with ensure_index; rebuilding needs no settings.
+    config: config_mod.Config | None = None,  # pylint: disable=unused-argument
 ) -> list[str]:
     """Drop all derived rows and re-scan ``docs/``.
 
@@ -227,6 +230,7 @@ def decision_from_text(rel_path: str, text: str) -> Decision:
 
 
 def insert_decision(conn: sqlite3.Connection, decision: Decision) -> int:
+    """Insert one decision and its tag/file/symbol links; returns the new row id."""
     cursor = conn.execute(
         """
         INSERT INTO decisions
@@ -457,12 +461,14 @@ def _search_like(
 
 
 def timeline(conn: sqlite3.Connection, limit: int = 500) -> list[sqlite3.Row]:
+    """Decisions in chronological order (oldest first)."""
     return conn.execute(
         "SELECT * FROM decisions ORDER BY date ASC, id ASC LIMIT ?", (limit,)
     ).fetchall()
 
 
 def topics(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Topic names with their decision count and most recent date."""
     return conn.execute(
         "SELECT topic, COUNT(*) AS count, MAX(date) AS last_date"
         " FROM decisions GROUP BY topic ORDER BY topic"
@@ -470,10 +476,12 @@ def topics(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def decision_by_path(conn: sqlite3.Connection, path: str) -> sqlite3.Row | None:
+    """Look up one decision by its repo-relative document path."""
     return conn.execute("SELECT * FROM decisions WHERE path = ?", (path,)).fetchone()
 
 
 def decision_tags(conn: sqlite3.Connection, decision_id: int) -> list[str]:
+    """Tags linked to ``decision_id``, alphabetically sorted."""
     rows = conn.execute(
         "SELECT tag FROM decision_tags WHERE decision_id = ? ORDER BY tag", (decision_id,)
     ).fetchall()
@@ -481,6 +489,7 @@ def decision_tags(conn: sqlite3.Connection, decision_id: int) -> list[str]:
 
 
 def decision_files(conn: sqlite3.Connection, decision_id: int) -> list[str]:
+    """File paths linked to ``decision_id``, sorted."""
     rows = conn.execute(
         "SELECT file_path FROM decision_files WHERE decision_id = ? ORDER BY file_path",
         (decision_id,),
@@ -489,6 +498,7 @@ def decision_files(conn: sqlite3.Connection, decision_id: int) -> list[str]:
 
 
 def decision_meta(conn: sqlite3.Connection, decision_id: int) -> dict[str, str]:
+    """Extra frontmatter fields (``rejected``, ``version``, ...) as a mapping."""
     rows = conn.execute(
         "SELECT key, value FROM decision_meta WHERE decision_id = ?", (decision_id,)
     ).fetchall()
@@ -498,6 +508,7 @@ def decision_meta(conn: sqlite3.Connection, decision_id: int) -> dict[str, str]:
 def decisions_for_file(
     conn: sqlite3.Connection, path: str, *, status: str | None = None
 ) -> list[sqlite3.Row]:
+    """Decisions declaring ``path`` (or a file below it), newest first."""
     sql = (
         "SELECT d.* FROM decisions d"
         " JOIN decision_files f ON f.decision_id = d.id"
@@ -512,6 +523,7 @@ def decisions_for_file(
 
 
 def decisions_for_symbol(conn: sqlite3.Connection, name: str) -> list[sqlite3.Row]:
+    """Decisions that list the qualified symbol ``name``, newest first."""
     return conn.execute(
         "SELECT d.* FROM decisions d"
         " JOIN decision_symbols s ON s.decision_id = d.id"
@@ -559,10 +571,12 @@ def superseded_by(conn: sqlite3.Connection, path: str) -> list[sqlite3.Row]:
 
 
 def api_versions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every indexed API version (releases and drafts)."""
     return conn.execute("SELECT * FROM api_versions ORDER BY version DESC").fetchall()
 
 
 def api_version(conn: sqlite3.Connection, version: str) -> sqlite3.Row | None:
+    """Metadata row for one API version, if indexed."""
     return conn.execute("SELECT * FROM api_versions WHERE version = ?", (version,)).fetchone()
 
 
@@ -573,6 +587,7 @@ def api_symbols(
     source_file: str | None = None,
     qualified_name: str | None = None,
 ) -> list[sqlite3.Row]:
+    """Query the symbol table, optionally filtered by version/file/name."""
     where: list[str] = []
     params: list[Any] = []
     if version:
@@ -591,6 +606,7 @@ def api_symbols(
 
 
 def api_topics(conn: sqlite3.Connection, version: str) -> list[str]:
+    """Topic names present in one API version."""
     rows = conn.execute(
         "SELECT DISTINCT topic FROM api_symbols WHERE version = ? ORDER BY topic",
         (version,),
@@ -606,7 +622,10 @@ def drop_api_version(conn: sqlite3.Connection, version: str) -> None:
 
 
 def stats(conn: sqlite3.Connection) -> dict[str, int]:
+    """Row counts per table, for ``decisions status``."""
+
     def count(table: str) -> int:
+        """Row count of ``table`` (names are internal, never user input)."""
         row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
         return int(row["n"]) if row else 0
 

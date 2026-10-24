@@ -44,22 +44,27 @@ def _hidden() -> None:
 
 
 class ExtractorTest(unittest.TestCase):
+    """Symbol extraction from a small Python module tree."""
+
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+        # `enterContext` registers the cleanup with unittest: the temporary
+        # directory is removed even when an assertion fails.
+        self._tmp = self.enterContext(
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
+        self.root = Path(self._tmp)
         (self.root / "src").mkdir()
         (self.root / "src" / "storage.py").write_text(textwrap.dedent(SOURCE), encoding="utf-8")
         self.config = Config(self.root, {"api": {"source_roots": ["src"]}})
 
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
     def extract(self) -> dict[str, object]:
+        """Extract the sample module and index its symbols by qualified name."""
         symbols, warnings = extractor.extract_symbols(self.root, self.config, "v1.0")
         self.assertEqual(warnings, [])
         return {symbol.qualified_name: symbol for symbol in symbols}
 
     def test_public_symbols(self) -> None:
+        """Modules, classes, methods, functions and constants are all extracted."""
         symbols = self.extract()
         self.assertEqual(
             sorted(symbols),
@@ -75,12 +80,14 @@ class ExtractorTest(unittest.TestCase):
         )
 
     def test_private_symbols_skipped(self) -> None:
+        """Names starting with ``_`` never become documented symbols."""
         symbols = self.extract()
         self.assertNotIn("storage._private", symbols)
         self.assertNotIn("storage.Database._internal", symbols)
         self.assertNotIn("storage._hidden", symbols)
 
     def test_method_signature_drops_self(self) -> None:
+        """Method signatures omit ``self`` and keep annotations and defaults."""
         symbols = self.extract()
         self.assertEqual(
             symbols["storage.Database.connect"].signature,
@@ -90,6 +97,7 @@ class ExtractorTest(unittest.TestCase):
         self.assertEqual(symbols["storage.Database.connect"].returns, "'Database'")
 
     def test_keyword_only_and_positional_only_markers(self) -> None:
+        """``/`` and ``*`` markers survive signature rendering."""
         symbols = self.extract()
         self.assertEqual(
             symbols["storage.open_db"].signature,
@@ -97,6 +105,7 @@ class ExtractorTest(unittest.TestCase):
         )
 
     def test_varargs(self) -> None:
+        """``*args``/``**kwargs`` are rendered in the signature."""
         symbols = self.extract()
         self.assertEqual(
             symbols["storage.Database.Cursor.fetch"].signature,
@@ -104,21 +113,25 @@ class ExtractorTest(unittest.TestCase):
         )
 
     def test_class_signature_and_doc(self) -> None:
+        """Classes keep their base list as signature and their docstring."""
         symbols = self.extract()
         self.assertEqual(symbols["storage.Database"].signature, "class Database(Base)")
         self.assertEqual(symbols["storage.Database"].doc, "A wrapper.")
 
     def test_constant(self) -> None:
+        """Module-level UPPER_CASE assignments become constants."""
         symbols = self.extract()
         self.assertEqual(symbols["storage.DEFAULT_DSN"].kind, "constant")
         self.assertEqual(symbols["storage.DEFAULT_DSN"].signature, "DEFAULT_DSN")
 
     def test_topic_mapping_defaults_to_first_module_part(self) -> None:
+        """Without ``[api.topics]`` the first module segment owns the topic."""
         symbols = self.extract()
         self.assertEqual(symbols["storage.Database"].topic, "storage")
         self.assertEqual(symbols["storage.Database"].doc_path, "docs/api/v1.0/storage/index.md")
 
     def test_explicit_topic_mapping(self) -> None:
+        """``[api.topics]`` globs override the module-derived topic."""
         config = Config(
             self.root,
             {"api": {"source_roots": ["src"], "topics": {"persistence": ["src/storage.py"]}}},
@@ -127,6 +140,7 @@ class ExtractorTest(unittest.TestCase):
         self.assertTrue(all(symbol.topic == "persistence" for symbol in symbols))
 
     def test_nested_package_module_name(self) -> None:
+        """``pkg/__init__.py`` maps to ``pkg`` and nested modules stay dotted."""
         package = self.root / "src" / "pkg"
         package.mkdir()
         (package / "__init__.py").write_text('"""Package."""\n', encoding="utf-8")
@@ -137,12 +151,14 @@ class ExtractorTest(unittest.TestCase):
         self.assertIn("pkg.core.run", names)
 
     def test_syntax_error_becomes_warning(self) -> None:
+        """A broken file yields a warning and does not abort the sync."""
         (self.root / "src" / "broken.py").write_text("def broken(:\n", encoding="utf-8")
         symbols, warnings = extractor.extract_symbols(self.root, self.config, "v1.0")
         self.assertTrue(any("broken.py" in warning for warning in warnings))
         self.assertTrue(symbols)
 
     def test_excluded_paths(self) -> None:
+        """Files matching ``api.exclude`` are not scanned."""
         tests = self.root / "src" / "tests"
         tests.mkdir()
         (tests / "test_x.py").write_text("def test_x() -> None:\n    pass\n", encoding="utf-8")

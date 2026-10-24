@@ -34,6 +34,7 @@ class FileLock:
         self._fd: int | None = None
 
     def acquire(self, *, blocking: bool = False, timeout: float = 0.0) -> bool:
+        """Try to take the lock; returns False when it is held elsewhere."""
         if self._fd is not None:
             return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,7 @@ class FileLock:
             return False
 
     def release(self) -> None:
+        """Release the lock if this instance holds it (idempotent)."""
         if self._fd is None:
             return
         fd, self._fd = self._fd, None

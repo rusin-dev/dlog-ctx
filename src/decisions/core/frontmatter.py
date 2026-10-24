@@ -71,6 +71,7 @@ def parse(text: str) -> tuple[dict[str, Any], str]:
 
 
 def parse_block(head: str) -> dict[str, Any]:
+    """Parse the text between the ``---`` delimiters into a metadata mapping."""
     meta: dict[str, Any] = {}
     current: str | None = None
     for raw in head.splitlines():
@@ -163,10 +164,7 @@ def _scalar(raw: str) -> Any:
     if not value:
         return ""
     if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
-        inner = value[1:-1]
-        if value[0] == '"':
-            return inner.replace('\\"', '"').replace("\\\\", "\\")
-        return inner.replace("''", "'")
+        return _unquote(value)
     if value.startswith("[") and value.endswith("]"):
         inner = value[1:-1].strip()
         return [_scalar(part) for part in _split_inline(inner)] if inner else []
@@ -176,6 +174,14 @@ def _scalar(raw: str) -> Any:
     if lowered in ("null", "~"):
         return None
     return value
+
+
+def _unquote(value: str) -> str:
+    """Strip one level of matching quotes and unescape the inner text."""
+    inner = value[1:-1]
+    if value[0] == '"':
+        return inner.replace('\\"', '"').replace("\\\\", "\\")
+    return inner.replace("''", "'")
 
 
 def _split_inline(inner: str) -> list[str]:

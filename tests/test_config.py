@@ -10,14 +10,18 @@ from decisions.core.config import Config, write_default
 
 
 class ConfigTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+    """Loading, merging and defaulting of ``decisions.toml`` files."""
 
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
+    def setUp(self) -> None:
+        # `enterContext` registers the cleanup with unittest: the temporary
+        # directory is removed even when an assertion fails.
+        self._tmp = self.enterContext(
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
+        self.root = Path(self._tmp)
 
     def test_defaults_without_files(self) -> None:
+        """Every field falls back to a default when no config file exists."""
         config = Config.load(self.root)
         self.assertEqual(config.source_roots, ["src"])
         self.assertTrue(config.tombstones)
@@ -26,6 +30,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.topic_patterns, {})
 
     def test_write_default_creates_local_file(self) -> None:
+        """``write_default`` creates the local file once and never overwrites it."""
         path = write_default(self.root)
         self.assertTrue(path.exists())
         self.assertEqual(path.relative_to(self.root).as_posix(), ".decisions/config.toml")
@@ -36,6 +41,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), "# custom\n")
 
     def test_shared_config_is_read(self) -> None:
+        """The committed ``decisions.toml`` is read without a local override."""
         (self.root / "decisions.toml").write_text(
             '[api]\nlanguages = ["python"]\n\n[api.topics]\ncore = ["src/core/**"]\n',
             encoding="utf-8",
@@ -45,6 +51,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.topic_patterns, {"core": ["src/core/**"]})
 
     def test_local_overrides_shared_and_keeps_siblings(self) -> None:
+        """The gitignored local file overrides keys but keeps sibling settings."""
         (self.root / "decisions.toml").write_text(
             '[api]\nsource_roots = ["src"]\nlanguages = ["python"]\n'
             'tombstones = true\n\n[api.topics]\ncore = ["src/core/**"]\n',
@@ -60,11 +67,13 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.topic_patterns, {"core": ["src/core/**"]})
 
     def test_invalid_config_raises(self) -> None:
+        """A malformed TOML file surfaces as ``ValueError``."""
         (self.root / "decisions.toml").write_text("[api\nbroken", encoding="utf-8")
         with self.assertRaises(ValueError):
             Config.load(self.root)
 
     def test_index_path_override(self) -> None:
+        """``index.path`` relocates the SQLite index."""
         (self.root / "decisions.toml").write_text(
             '[index]\npath = ".decisions/other.db"\n', encoding="utf-8"
         )

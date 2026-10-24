@@ -18,6 +18,7 @@ from pathlib import Path
 from decisions import cli as decisions_cli
 from decisions.api import cli as api_cli
 from decisions.api import sync
+from decisions.api.lock import FileLock
 from decisions.core import gitutils, project
 
 APP_SOURCE = '''"""Application entry point."""
@@ -41,9 +42,15 @@ def helper(value: int) -> int:
 
 @unittest.skipIf(shutil.which("git") is None, "git is required")
 class RepoTestCase(unittest.TestCase):
+    """Base class that gives every test an initialised throwaway repository."""
+
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name).resolve()
+        # `enterContext` registers the cleanup with unittest: the temporary
+        # directory is removed even when an assertion fails.
+        self._tmp = self.enterContext(
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
+        self.root = Path(self._tmp).resolve()
         self._env_before = os.environ.pop("DECISIONS_ROOT", None)
         self.git("init", "-q", "-b", "main", ".")
         self.git("config", "user.email", "test@example.com")
@@ -63,20 +70,23 @@ class RepoTestCase(unittest.TestCase):
         os.environ.pop("DECISIONS_ROOT", None)
         if self._env_before is not None:
             os.environ["DECISIONS_ROOT"] = self._env_before
-        self._tmp.cleanup()
 
     # -- helpers --------------------------------------------------------
     def git(self, *args: str) -> str:
+        """Run a git command in the test repository and return its stdout."""
         return gitutils.out(self.root, *args)
 
     def commit(self, message: str = "commit") -> None:
+        """Stage everything and commit it."""
         gitutils.add(self.root, ".")
         gitutils.commit(self.root, message)
 
     def decisions(self, *args: str) -> tuple[int, str]:
+        """Run ``decisions <args>`` against the test repository."""
         return self._run(decisions_cli.main, args)
 
     def api(self, *args: str) -> tuple[int, str]:
+        """Run ``decisions-api <args>`` against the test repository."""
         return self._run(api_cli.main, args)
 
     def _run(self, entry, args: tuple[str, ...]) -> tuple[int, str]:
@@ -100,7 +110,10 @@ class RepoTestCase(unittest.TestCase):
 
 
 class DecisionFlowTest(RepoTestCase):
+    """``add`` / ``recall`` / ``timeline`` / ``context`` end to end."""
+
     def test_add_recall_timeline_context(self) -> None:
+        """A recorded decision is reachable through every read command."""
         target = str(self.root / "src" / "app.py")
         code, output = self.decisions(
             "add",
@@ -165,6 +178,7 @@ class DecisionFlowTest(RepoTestCase):
         self.assertEqual(context["decisions"][0]["rejected"], ["Postgres (deployment cost)"])
 
     def test_topics_and_dedup_slugs(self) -> None:
+        """Two decisions with the same title get distinct file paths."""
         for _ in range(2):
             code, output = self.decisions(
                 "add", "--topic", "ui", "-r", "Same title", "--title", "Same title"
@@ -179,6 +193,7 @@ class DecisionFlowTest(RepoTestCase):
         self.assertEqual(json.loads(output)[0]["topic"], "ui")
 
     def test_supersede_chain_in_context(self) -> None:
+        """``supersedes`` links the replacement to the old decision."""
         code, output = self.decisions(
             "add",
             "--topic",
@@ -224,6 +239,7 @@ class DecisionFlowTest(RepoTestCase):
         self.assertEqual(chain[0]["superseded_by"][0], context["decisions"][0]["path"])
 
     def test_missing_file_is_reported(self) -> None:
+        """``context`` reports a note for a path that exists nowhere."""
         code, output = self.decisions("context", "src/missing.py", "--json")
         self.assertEqual(code, 0, output)
         payload = json.loads(output)
@@ -232,7 +248,10 @@ class DecisionFlowTest(RepoTestCase):
 
 
 class ApiCycleTest(RepoTestCase):
+    """``sync`` / ``indev`` / ``release`` lifecycle on a real repository."""
+
     def test_sync_requires_indev_branch(self) -> None:
+        """Draft patches may only be generated on ``indev-<version>``."""
         code, output = self.api("head", "add", "v1.0")
         self.assertEqual(code, 0, output)
         project.version_dir(self.root, "v1.0").mkdir(parents=True, exist_ok=True)
@@ -242,6 +261,7 @@ class ApiCycleTest(RepoTestCase):
         self.assertIn("indev-v1.0", output)
 
     def test_full_cycle_generates_docs(self) -> None:
+        """A full indev cycle leaves a clean tree and a rendered baseline."""
         self.bootstrap_baseline("v1.0")
         doc = self.root / "docs" / "api" / "v1.0" / "app" / "index.md"
         self.assertTrue(doc.exists())
@@ -260,6 +280,7 @@ class ApiCycleTest(RepoTestCase):
         self.assertIn("v1.0 baseline confirmed", output)
 
     def test_patch_never_touches_baseline_before_finish(self) -> None:
+        """``sync`` only writes the draft patch, never the confirmed baseline."""
         self.bootstrap_baseline("v1.0")
         code, output = self.api("head", "add", "v1.1")
         self.assertEqual(code, 0, output)
@@ -310,6 +331,7 @@ class ApiCycleTest(RepoTestCase):
         self.assertIn("+def extra() -> None", output)
 
     def test_removal_creates_tombstone_and_context_reports_it(self) -> None:
+        """A deleted symbol keeps its anchor and is reported as removed."""
         self.bootstrap_baseline("v1.0")
         code, output = self.api("head", "add", "v1.1")
         self.assertEqual(code, 0, output)
@@ -355,6 +377,7 @@ def helper(value: int) -> int:
         self.assertEqual(symbols["app.helper"]["removed_in"], "v1.1")
 
     def test_release_tags_and_rejects_pending_patch(self) -> None:
+        """``release`` tags once and refuses to tag over an unconfirmed patch."""
         self.bootstrap_baseline("v1.0")
         code, _ = self.api("head", "add", "v1.1")
         self.assertEqual(code, 0)
@@ -386,8 +409,7 @@ def helper(value: int) -> int:
         self.assertIn("vX.Y.Z", output)
 
     def test_sync_skips_silently_when_lock_is_held(self) -> None:
-        from decisions.api.lock import FileLock
-
+        """A concurrent holder of ``docs/api/.lock`` makes sync a no-op."""
         self.bootstrap_baseline("v1.0")
         self.assertEqual(self.api("head", "add", "v1.1")[0], 0)
         shutil.copytree(self.root / "docs" / "api" / "v1.0", self.root / "docs" / "api" / "v1.1")
@@ -405,6 +427,7 @@ def helper(value: int) -> int:
             lock.release()
 
     def test_indev_list_and_check(self) -> None:
+        """``indev list`` reports version state; ``check`` flags orphan drafts."""
         self.bootstrap_baseline("v1.0")
         code, output = self.api("indev", "list", "--json")
         self.assertEqual(code, 0, output)
@@ -421,6 +444,7 @@ def helper(value: int) -> int:
         self.assertIn("orphan", output)
 
     def test_indev_start_validations(self) -> None:
+        """``indev start`` refuses missing baselines, dirty trees and duplicates."""
         code, _ = self.api("head", "add", "v2.0")
         self.assertEqual(code, 0)
         code, output = self.api("indev", "start", "v2.0")
@@ -441,6 +465,7 @@ def helper(value: int) -> int:
         self.assertIn("already exists", output)
 
     def test_finish_resume_after_conflict_is_possible(self) -> None:
+        """A conflicted merge is left in place and finished with ``--resume``."""
         self.bootstrap_baseline("v1.0")
         self.assertEqual(self.api("head", "add", "v1.1")[0], 0)
         shutil.copytree(self.root / "docs" / "api" / "v1.0", self.root / "docs" / "api" / "v1.1")
@@ -469,6 +494,7 @@ def helper(value: int) -> int:
         self.assertEqual((self.root / "src" / "app.py").read_text(encoding="utf-8"), "# resolved\n")
 
     def test_no_merge_stops_before_merge(self) -> None:
+        """``--no-merge`` stops on the indev branch after committing."""
         self.bootstrap_baseline("v1.0")
         self.assertEqual(self.api("head", "add", "v1.1")[0], 0)
         shutil.copytree(self.root / "docs" / "api" / "v1.0", self.root / "docs" / "api" / "v1.1")
@@ -480,6 +506,7 @@ def helper(value: int) -> int:
         self.assertIn("merge skipped", output)
 
     def test_close_head_removes_version_line(self) -> None:
+        """``--close-head`` drops the finished version from ``docs/api/head``."""
         self.bootstrap_baseline("v1.0")
         self.assertEqual(project.read_head(self.root), ["v1.0"])
         self.assertEqual(self.api("head", "add", "v1.1")[0], 0)
@@ -491,6 +518,7 @@ def helper(value: int) -> int:
         self.assertEqual(project.read_head(self.root), ["v1.0"])
 
     def test_head_commands(self) -> None:
+        """``head add/list/remove`` are idempotent and validate versions."""
         code, output = self.api("head", "add", "v1.0")
         self.assertEqual(code, 0, output)
         code, output = self.api("head", "add", "v1.0")
@@ -506,6 +534,7 @@ def helper(value: int) -> int:
         self.assertIn("not a valid version", output)
 
     def test_head_add_create_bootstraps_baseline(self) -> None:
+        """``head add --create`` creates the baseline directory as well."""
         code, output = self.api("head", "add", "v2.0", "--create")
         self.assertEqual(code, 0, output)
         self.assertTrue(project.version_dir(self.root, "v2.0").is_dir())
@@ -515,6 +544,7 @@ def helper(value: int) -> int:
         self.assertEqual(self.api("indev", "start", "v2.0")[0], 0)
 
     def test_sync_extracts_non_python_sources(self) -> None:
+        """Non-Python sources are documented by the regex backends."""
         web = self.root / "src" / "web"
         web.mkdir()
         (web / "app.ts").write_text(
@@ -534,6 +564,7 @@ def helper(value: int) -> int:
         self.assertIn("public start(port: number): void", text)
 
     def test_docstring_backreferences_resolved_in_context(self) -> None:
+        """``@decision:`` markers resolve to decisions and stale ones are noted."""
         source = APP_SOURCE.replace(
             '"""Run it."""', '"""Run it.\n\n@decision:storage/use-sqlite\n"""'
         ).replace('"""Help."""', '"""Help.\n\n@decision:missing/ghost\n"""')

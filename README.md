@@ -406,7 +406,7 @@ src/decisions/
   api/
     cli.py          # decisions-api entry point
     extractor.py    # file walking, topic mapping, warnings
-    langs/          # backend registry: python_ast.py + generic.py (regex)
+    langs/          # backend registry: base.py + python_ast.py + generic.py (regex)
     render.py       # Markdown render + parse (anchors, callouts, refs)
     diff.py         # in-memory unified diff
     sync.py         # sync orchestration + consistency check

@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
+
+from . import gitutils
+from .models import normalize_version
 
 DECISION_DIR = "docs/decision"
 API_DIR = "docs/api"
@@ -39,41 +41,47 @@ def find_root(start: str | Path | None = None) -> Path:
 
 
 def decision_root(root: Path) -> Path:
+    """``<root>/docs/decision``: one directory per topic."""
     return root / DECISION_DIR
 
 
 def api_root(root: Path) -> Path:
+    """``<root>/docs/api``: one directory per version."""
     return root / API_DIR
 
 
 def state_dir(root: Path) -> Path:
+    """``<root>/.decisions``: gitignored local state (index, config)."""
     return root / STATE_DIR
 
 
 def head_path(root: Path) -> Path:
+    """``<root>/docs/api/head``: the list of in-development versions."""
     return root / HEAD_FILE
 
 
 def index_path(root: Path) -> Path:
+    """``<root>/.decisions/index.db``: the derived SQLite index."""
     return root / INDEX_FILE
 
 
 def lock_path(root: Path) -> Path:
+    """``<root>/docs/api/.lock``: advisory lock for sync/release."""
     return root / LOCK_FILE
 
 
 def draft_dir(root: Path, version: str) -> Path:
+    """``<root>/docs/api/~<version>``: draft workspace of one version."""
     return root / API_DIR / f"~{version}"
 
 
 def version_dir(root: Path, version: str) -> Path:
+    """``<root>/docs/api/<version>``: confirmed baseline of one version."""
     return root / API_DIR / version
 
 
 def read_head(root: Path) -> list[str]:
     """Read ``docs/api/head``: one in-development version per line, first is default."""
-    from .models import normalize_version
-
     path = head_path(root)
     if not path.exists():
         return []
@@ -86,8 +94,7 @@ def read_head(root: Path) -> list[str]:
 
 
 def write_head(root: Path, versions: list[str]) -> None:
-    from .models import normalize_version
-
+    """Rewrite ``docs/api/head`` with ``versions`` (first one is the default)."""
     path = head_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"{normalize_version(v)}\n" for v in versions]
@@ -114,19 +121,9 @@ def rel(root: Path, path: str | Path) -> str:
 
 
 def _git_toplevel(start: Path) -> Path | None:
+    """Git worktree root containing ``start``, or ``None`` outside a repository."""
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
+        toplevel = gitutils.out(start, "rev-parse", "--show-toplevel")
+    except gitutils.GitError:  # pragma: no cover - git binary missing
         return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.strip()
-    return Path(out).resolve() if out else None
+    return Path(toplevel).resolve() if toplevel else None

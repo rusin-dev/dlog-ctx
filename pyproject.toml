@@ -33,3 +33,23 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pylint.main]
+# Lint against the floor of `requires-python`.
+py-version = "3.11"
+
+[tool.pylint."messages control"]
+# Single-method containers (`Backend`, `ExtractCallable`) are intentional.
+min-public-methods = 1
+
+[tool.pylint.design]
+# The pipeline is deliberately explicit: SQL/query builders take their filters
+# as keyword arguments and the dataclasses mirror database rows one-to-one, so
+# the stock advisory thresholds are too tight for this code base.
+max-args = 10
+max-positional-arguments = 10
+max-attributes = 16
+max-locals = 30
+max-branches = 20
+max-statements = 60
+max-returns = 8

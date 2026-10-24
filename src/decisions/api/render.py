@@ -55,6 +55,7 @@ def doc_path(version: str, topic: str) -> str:
 
 
 def anchor_of(qualified_name: str) -> str:
+    """Heading anchor for ``qualified_name`` (GitHub slug rules)."""
     return anchor(qualified_name)
 
 
@@ -64,10 +65,12 @@ def anchor_of(qualified_name: str) -> str:
 
 
 def default_preamble(topic: str) -> str:
+    """Preamble (title + generated-file note) for a fresh topic document."""
     return f"# {topic}\n\n{HEADER_NOTE}\n"
 
 
 def render_meta_lines(symbol: ApiSymbol) -> list[str]:
+    """Render the ``- **Key**: value`` metadata block of a symbol section."""
     lines = [
         f"- **Module**: `{symbol.module}`",
         f"- **Kind**: `{symbol.kind}`",
@@ -150,6 +153,7 @@ def render_section(
 
 
 def render_document(preamble: str, sections: list[str]) -> str:
+    """Join a preamble and its sections into one Markdown document."""
     body = "\n\n".join(section for section in sections if section.strip())
     text = preamble.rstrip("\n")
     if body:
@@ -176,6 +180,8 @@ def _callout_present(callouts: list[str], version: str, marker: str) -> bool:
 
 @dataclass
 class ParsedSection:
+    """One ``decisions:api`` marker-delimited section of a rendered document."""
+
     name: str
     callouts: list[str] = field(default_factory=list)
     signature: str = ""
@@ -185,23 +191,28 @@ class ParsedSection:
 
     @property
     def status(self) -> str:
+        """``"removed"`` for tombstone sections, ``"active"`` otherwise."""
         return "removed" if self.meta.get("Status", "active").startswith("removed") else "active"
 
     @property
     def removed_in(self) -> str | None:
+        """Version recorded in the ``Status`` line, if the symbol was removed."""
         match = re.search(r"removed in (\S+)", self.meta.get("Status", ""))
         return match.group(1) if match else None
 
     @property
     def kind(self) -> str:
+        """Symbol kind (``function``, ``class``, ...) from the metadata block."""
         return self.meta.get("Kind", "symbol")
 
     @property
     def module(self) -> str:
+        """Module path recorded in the metadata block."""
         return self.meta.get("Module", "")
 
     @property
     def decision_refs(self) -> list[str]:
+        """``@decision:`` back-references listed in the metadata block."""
         raw = self.meta.get("Decisions", "")
         refs: list[str] = []
         for item in raw.split(","):
@@ -212,6 +223,7 @@ class ParsedSection:
 
     @property
     def source_file(self) -> str | None:
+        """Source file from ``Defined in``, without the line suffix."""
         location = self.meta.get("Defined in", "")
         if not location:
             return None
@@ -219,6 +231,7 @@ class ParsedSection:
 
     @property
     def lineno(self) -> int | None:
+        """Line number from ``Defined in``, when present."""
         location = self.meta.get("Defined in", "")
         if not _has_line_suffix(location):
             return None
@@ -227,14 +240,15 @@ class ParsedSection:
         except ValueError:
             return None
 
-    def to_symbol(self, doc_path: str) -> ApiSymbol:
-        topic = topic_from_doc_path(doc_path) or self.module.split(".")[0]
+    def to_symbol(self, document_path: str) -> ApiSymbol:
+        """Turn the parsed section back into an :class:`ApiSymbol`."""
+        topic = topic_from_doc_path(document_path) or self.module.split(".")[0]
         return ApiSymbol(
             qualified_name=self.name,
             kind=self.kind,
             module=self.module,
             topic=topic,
-            doc_path=doc_path,
+            doc_path=document_path,
             signature=self.signature,
             returns=_strip_ticks(self.meta.get("Returns")),
             doc=self.doc or None,
@@ -248,6 +262,8 @@ class ParsedSection:
 
 @dataclass
 class ParsedDocument:
+    """A rendered document split into its preamble and marker sections."""
+
     preamble: str = ""
     sections: dict[str, ParsedSection] = field(default_factory=dict)
 

@@ -6,7 +6,9 @@ default, so the first run stays frictionless.
 
 from __future__ import annotations
 
-import tomllib
+# Stdlib since Python 3.11 (see requires-python); the disable keeps runs on
+# older interpreters lintable instead of reporting a misleading import error.
+import tomllib  # pylint: disable=import-error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,12 +59,15 @@ languages = "auto"
 
 @dataclass
 class Config:
+    """Merged ``decisions.toml`` + ``.decisions/config.toml`` view of the project."""
+
     root: Path
     data: dict[str, Any] = field(default_factory=dict)
 
     # -- loading --------------------------------------------------------
     @classmethod
     def load(cls, root: Path) -> Config:
+        """Load the shared config, then merge the gitignored local one on top."""
         data: dict[str, Any] = {}
         shared = root / SHARED_CONFIG_REL
         if shared.exists():
@@ -73,6 +78,7 @@ class Config:
         return cls(root=root, data=data)
 
     def get(self, dotted: str, default: Any = None) -> Any:
+        """Read a dotted key (``"api.source_roots"``), falling back to ``default``."""
         node: Any = self.data
         for part in dotted.split("."):
             if not isinstance(node, dict) or part not in node:
@@ -83,10 +89,12 @@ class Config:
     # -- derived settings -----------------------------------------------
     @property
     def index_path(self) -> Path:
+        """Absolute path of the SQLite index file."""
         return self.root / self.get("index.path", ".decisions/index.db")
 
     @property
     def source_roots(self) -> list[str]:
+        """Repo-relative directories (or files) scanned for API symbols."""
         roots = self.get("api.source_roots", ["src"])
         if isinstance(roots, str):
             roots = [roots]
@@ -94,6 +102,7 @@ class Config:
 
     @property
     def exclude(self) -> list[str]:
+        """Glob patterns excluded from symbol extraction."""
         patterns = self.get("api.exclude", DEFAULT_EXCLUDE)
         if isinstance(patterns, str):
             patterns = [patterns]
@@ -101,6 +110,7 @@ class Config:
 
     @property
     def topic_patterns(self) -> dict[str, list[str]]:
+        """Explicit ``topic -> globs`` ownership map from ``[api.topics]``."""
         raw = self.get("api.topics", {}) or {}
         result: dict[str, list[str]] = {}
         if isinstance(raw, dict):
@@ -112,6 +122,7 @@ class Config:
 
     @property
     def tombstones(self) -> bool:
+        """Keep tombstone sections for removed symbols (keeps anchors alive)."""
         return bool(self.get("api.tombstones", True))
 
     @property
@@ -129,6 +140,7 @@ class Config:
 
 
 def write_default(root: Path, *, overwrite: bool = False) -> Path:
+    """Write the commented default config, unless it exists and ``overwrite`` is false."""
     path = root / CONFIG_REL
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not overwrite:

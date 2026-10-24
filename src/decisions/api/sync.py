@@ -25,6 +25,8 @@ PATCH_NAME = "changes.patch"
 
 @dataclass
 class SyncResult:
+    """Outcome of one sync pass (counts, patch text and warnings)."""
+
     version: str
     patch_path: Path | None = None
     patch_text: str = ""
@@ -39,6 +41,7 @@ class SyncResult:
 
     @property
     def has_changes(self) -> bool:
+        """True when the computed patch is not empty."""
         return bool(self.patch_text)
 
 
@@ -64,10 +67,12 @@ def ensure_draft_dir(root: Path, version: str) -> Path:
 
 
 def patch_path(root: Path, version: str) -> Path:
+    """Path of the draft patch file for ``version``."""
     return project.draft_dir(root, version) / PATCH_NAME
 
 
 def read_patch(root: Path, version: str) -> str:
+    """Read the draft patch for ``version`` (``""`` when absent)."""
     path = patch_path(root, version)
     if not path.exists():
         return ""
@@ -135,6 +140,7 @@ def current_tree(root: Path, target: dict[str, str | None]) -> dict[str, str | N
 def compute_patch(
     root: Path, version: str, config: config_mod.Config | None = None
 ) -> tuple[str, dict[str, str], dict[str, str | None], list, list[str]]:
+    """Return ``(patch, base_docs, target_tree, symbols, warnings)``."""
     base_docs, target, symbols, warnings = plan(root, version, config)
     patch = diff_mod.diff_tree(current_tree(root, target), target)
     return patch, base_docs, target, symbols, warnings

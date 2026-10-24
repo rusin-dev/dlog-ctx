@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from ...core.models import ApiSymbol, decision_refs, strip_decision_refs
-from . import Backend
+from .base import Backend, module_symbol
 
 CONTROL_KEYWORDS = {
     "if",
@@ -60,6 +60,13 @@ CONTROL_KEYWORDS = {
 
 @dataclass(frozen=True)
 class LanguageSpec:
+    """Declarative description of one regex-scanned language.
+
+    ``containers`` establish scopes (classes/modules), ``functions`` produce
+    method/function symbols and ``constants`` produce constant symbols. When no
+    pattern matches, the line is simply ignored.
+    """
+
     name: str
     suffixes: tuple[str, ...]
     containers: tuple[re.Pattern[str], ...]
@@ -81,15 +88,22 @@ SPECS: tuple[LanguageSpec, ...] = (
         name="javascript",
         suffixes=(".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"),
         containers=_patterns(
-            r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+(?P<name>[A-Za-z_$][\w$]*)",
+            r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+"
+            r"(?P<name>[A-Za-z_$][\w$]*)",
             r"^(?:export\s+)?(?:declare\s+)?interface\s+(?P<name>[A-Za-z_$][\w$]*)",
             r"^(?:export\s+)?(?:declare\s+)?enum\s+(?P<name>[A-Za-z_$][\w$]*)",
-            r"^(?:export\s+)?(?:declare\s+)?type\s+(?P<name>[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*=",
+            r"^(?:export\s+)?(?:declare\s+)?type\s+(?P<name>[A-Za-z_$][\w$]*)\s*"
+            r"(?:<[^>]*>)?\s*=",
         ),
         functions=_patterns(
-            r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?P<name>[A-Za-z_$][\w$]*)\s*[(<]",
-            r"^(?:export\s+)?(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)",
-            r"^(?:(?:public|private|protected|static|async|readonly|override|get|set|declare|abstract)\s+)*(?P<name>[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^;{]*\)\s*(?::[^{]+)?\{",
+            r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*"
+            r"(?P<name>[A-Za-z_$][\w$]*)\s*[(<]",
+            r"^(?:export\s+)?(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*"
+            r"(?::[^=]+)?=\s*(?:async\s*)?"
+            r"(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)",
+            r"^(?:(?:public|private|protected|static|async|readonly|override|get|set"
+            r"|declare|abstract)\s+)*(?P<name>[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*"
+            r"\([^;{]*\)\s*(?::[^{]+)?\{",
         ),
         constants=_patterns(
             r"^(?:export\s+)?(?:const|let|var)\s+(?P<name>[A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=",
@@ -119,7 +133,8 @@ SPECS: tuple[LanguageSpec, ...] = (
             r"^impl(?:<[^>]*>)?\s+(?:[A-Za-z_][\w:<>, ]*\s+for\s+)?(?P<name>[A-Za-z_]\w*)",
         ),
         functions=_patterns(
-            r'^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+(?P<name>[A-Za-z_]\w*)',
+            r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?"
+            r'(?:extern\s+"[^"]*"\s+)?fn\s+(?P<name>[A-Za-z_]\w*)',
         ),
         constants=_patterns(
             r"^(?:pub(?:\([^)]*\))?\s+)?const\s+(?P<name>[A-Z][A-Z0-9_]*)\s*:",
@@ -131,14 +146,19 @@ SPECS: tuple[LanguageSpec, ...] = (
         name="java",
         suffixes=(".java",),
         containers=_patterns(
-            r"^(?:(?:public|private|protected|static|final|abstract|sealed|non-sealed|strictfp)\s+)*(?:class|interface|enum|record|@interface)\s+(?P<name>[A-Za-z_]\w*)",
+            r"^(?:(?:public|private|protected|static|final|abstract|sealed|non-sealed|strictfp)"
+            r"\s+)*(?:class|interface|enum|record|@interface)\s+(?P<name>[A-Za-z_]\w*)",
         ),
         functions=_patterns(
-            r"^(?:(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*(?:<[^>]+>\s*)?(?:[\w$.<>\[\],?]+\s+)+(?P<name>[A-Za-z_]\w*)\s*\([^;]*\)\s*(?:throws\s+[\w$.,\s]+)?\{",
-            r"^(?:(?:public|private|protected)\s+)*(?P<name>[A-Z]\w*)\s*\([^;]*\)\s*(?:throws\s+[\w$.,\s]+)?\{",
+            r"^(?:(?:public|private|protected|static|final|abstract|synchronized|native"
+            r"|default|strictfp)\s+)*(?:<[^>]+>\s*)?(?:[\w$.<>\[\],?]+\s+)+"
+            r"(?P<name>[A-Za-z_]\w*)\s*\([^;]*\)\s*(?:throws\s+[\w$.,\s]+)?\{",
+            r"^(?:(?:public|private|protected)\s+)*(?P<name>[A-Z]\w*)\s*\([^;]*\)\s*"
+            r"(?:throws\s+[\w$.,\s]+)?\{",
         ),
         constants=_patterns(
-            r"^(?:(?:public|private|protected|static|final)\s+)+[\w$.<>\[\],?]+\s+(?P<name>[A-Z][A-Z0-9_]*)\s*=",
+            r"^(?:(?:public|private|protected|static|final)\s+)+[\w$.<>\[\],?]+\s+"
+            r"(?P<name>[A-Z][A-Z0-9_]*)\s*=",
         ),
         doc_prefixes=("///", "/**", "/*", "//", "*"),
     ),
@@ -146,10 +166,14 @@ SPECS: tuple[LanguageSpec, ...] = (
         name="kotlin",
         suffixes=(".kt", ".kts"),
         containers=_patterns(
-            r"^(?:(?:public|private|protected|internal|open|abstract|sealed|data|enum|annotation|inner|value)\s+)*(?:class|interface|object)\s+(?P<name>[A-Za-z_]\w*)",
+            r"^(?:(?:public|private|protected|internal|open|abstract|sealed|data|enum"
+            r"|annotation|inner|value)\s+)*(?:class|interface|object)\s+"
+            r"(?P<name>[A-Za-z_]\w*)",
         ),
         functions=_patterns(
-            r"^(?:(?:public|private|protected|internal|open|abstract|override|suspend|inline|operator|infix|tailrec|external|actual|expect)\s+)*fun\s+(?:<[^>]+>\s*)?(?:[\w.<>?,\s]+\.)?(?P<name>[A-Za-z_]\w*)\s*\(",
+            r"^(?:(?:public|private|protected|internal|open|abstract|override|suspend"
+            r"|inline|operator|infix|tailrec|external|actual|expect)\s+)*fun\s+"
+            r"(?:<[^>]+>\s*)?(?:[\w.<>?,\s]+\.)?(?P<name>[A-Za-z_]\w*)\s*\(",
         ),
         constants=_patterns(
             r"^(?:(?:public|private|internal|const)\s+)*const\s+val\s+(?P<name>[A-Z][A-Z0-9_]*)\b",
@@ -160,13 +184,19 @@ SPECS: tuple[LanguageSpec, ...] = (
         name="csharp",
         suffixes=(".cs",),
         containers=_patterns(
-            r"^(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly|unsafe|new)\s+)*(?:class|interface|struct|enum|record)\s+(?P<name>[A-Za-z_]\w*)",
+            r"^(?:(?:public|private|protected|internal|static|abstract|sealed|partial"
+            r"|readonly|unsafe|new)\s+)*(?:class|interface|struct|enum|record)\s+"
+            r"(?P<name>[A-Za-z_]\w*)",
         ),
         functions=_patterns(
-            r"^(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed|extern|partial|new|unsafe)\s+)*(?:[\w.<>\[\],?]+\s+)+(?P<name>[A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^;]*\)\s*(?:where\s[^{]+)?\{",
+            r"^(?:(?:public|private|protected|internal|static|virtual|override|abstract"
+            r"|async|sealed|extern|partial|new|unsafe)\s+)*(?:[\w.<>\[\],?]+\s+)+"
+            r"(?P<name>[A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^;]*\)\s*"
+            r"(?:where\s[^{]+)?\{",
         ),
         constants=_patterns(
-            r"^(?:(?:public|private|protected|internal|static|const|readonly)\s+)+[\w.<>\[\],?]+\s+(?P<name>[A-Z][A-Z0-9_]*)\s*=",
+            r"^(?:(?:public|private|protected|internal|static|const|readonly)\s+)+"
+            r"[\w.<>\[\],?]+\s+(?P<name>[A-Z][A-Z0-9_]*)\s*=",
         ),
         doc_prefixes=("///", "/**", "/*", "//", "*"),
     ),
@@ -183,10 +213,12 @@ SPECS: tuple[LanguageSpec, ...] = (
         name="php",
         suffixes=(".php",),
         containers=_patterns(
-            r"^(?:(?:final|abstract|readonly)\s+)*(?:class|interface|trait|enum)\s+(?P<name>[A-Za-z_]\w*)",
+            r"^(?:(?:final|abstract|readonly)\s+)*(?:class|interface|trait|enum)\s+"
+            r"(?P<name>[A-Za-z_]\w*)",
         ),
         functions=_patterns(
-            r"^(?:(?:public|private|protected|static|final|abstract)\s+)*function\s+&?\s*(?P<name>[A-Za-z_]\w*)\s*\(",
+            r"^(?:(?:public|private|protected|static|final|abstract)\s+)*function\s+"
+            r"&?\s*(?P<name>[A-Za-z_]\w*)\s*\(",
         ),
         constants=_patterns(
             r"^(?:(?:public|private|protected)\s+)?const\s+(?P<name>[A-Z][A-Z0-9_]*)\b",
@@ -205,18 +237,10 @@ def extract(
     doc_path: str,
     rel_path: str,
 ) -> list[ApiSymbol]:
+    """Scan ``text`` with ``spec`` and return every public symbol found."""
     lines = text.splitlines()
     symbols: list[ApiSymbol] = [
-        ApiSymbol(
-            qualified_name=module,
-            kind="module",
-            module=module,
-            topic=topic,
-            doc_path=doc_path,
-            signature=f"module {module}",
-            source_file=rel_path,
-            lineno=1,
-        )
+        module_symbol(module=module, topic=topic, doc_path=doc_path, rel_path=rel_path)
     ]
     scopes: list[tuple[int, str]] = []  # (depth or indent, name)
     depth = 0
@@ -423,6 +447,8 @@ def _leading_doc(lines: list[str], index: int, prefixes: tuple[str, ...]) -> str
 
 
 def _build_backend(spec: LanguageSpec) -> Backend:
+    """Wrap one :class:`LanguageSpec` as a registrable backend."""
+
     def run(
         text: str,
         *,
@@ -431,6 +457,7 @@ def _build_backend(spec: LanguageSpec) -> Backend:
         doc_path: str,
         rel_path: str,
     ) -> list[ApiSymbol]:
+        """Extract symbols for this spec (backend protocol adapter)."""
         return extract(
             spec,
             text,
